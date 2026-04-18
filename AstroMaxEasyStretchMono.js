@@ -474,7 +474,12 @@ function EasyStretchMonoDialog() {
    this.PW = PW; this.PH = PH;
 
    this.canvas = new Control(this);
-   this.canvas.setFixedSize(PW, PH);
+   this.canvas.setMinSize(PW, PH);
+   this.canvas.onResize = function(wNew, hNew) {
+      self.PW = wNew; self.PH = hNew;
+      if (self.lastRes !== null) self.renderPreview();
+      else self.canvas.repaint();
+   };
    this.canvas.onPaint = function() {
       var g  = new VectorGraphics(self.canvas);
       var cw = self.canvas.width, ch = self.canvas.height;
@@ -583,7 +588,7 @@ function EasyStretchMonoDialog() {
          var nPH = Math.round(nPW * self.origImg.height / self.origImg.width);
          if (nPH > 520) { nPH = 520; nPW = Math.round(nPH * self.origImg.width / self.origImg.height); }
          self.PW = nPW; self.PH = nPH;
-         self.canvas.setFixedSize(nPW, nPH);
+         self.canvas.setMinSize(nPW, nPH);
          self.adjustToContents();
 
          // Kreiraj G_TMP za preview dimenzije — identičan EasyStretch.js pattern
@@ -687,8 +692,8 @@ function EasyStretchMonoDialog() {
 
    // ── Main layout ───────────────────────────────────────────
    var mainRow = new Sizer(false); mainRow.spacing = 8;
-   mainRow.add(this.canvas);
-   mainRow.add(ctrlPanel);
+   mainRow.add(this.canvas, 100);
+   mainRow.add(ctrlPanel, 0);
 
    this.sizer = new Sizer(true);
    this.sizer.margin = 8;
