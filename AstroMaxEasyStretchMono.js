@@ -278,26 +278,58 @@ function normParams(img) {
 }
 
 // renderFull — identičan EasyStretch.js: normParams(img) ne normParams(sc)!
+function sampleBilinear(img,fx,fy,c){
+   var w=img.width,h=img.height;
+   var x0=Math.max(0,Math.min(w-2,Math.floor(fx)));
+   var y0=Math.max(0,Math.min(h-2,Math.floor(fy)));
+   var tx=fx-x0,ty=fy-y0;
+   return img.sample(x0,y0,c)*(1-tx)*(1-ty)
+         +img.sample(x0+1,y0,c)*tx*(1-ty)
+         +img.sample(x0,y0+1,c)*(1-tx)*ty
+         +img.sample(x0+1,y0+1,c)*tx*ty;
+}
+
+function toU8(v,lo,range){
+   return Math.min(255,Math.max(0,Math.round((v-lo)/range*255)));
+}
+
 function renderFull(img, W, H) {
    var scale = Math.min(W / img.width, H / img.height);
    var dw    = Math.max(1, Math.round(img.width  * scale));
    var dh    = Math.max(1, Math.round(img.height * scale));
    var sc    = scaleImage(img, scale);
-   var n     = normParams(img);   // <-- original img, ne scaled!
+   var n     = normParams(img);
    var bmp   = new Bitmap(dw, dh);
    var ch    = sc.numberOfChannels;
    for (var y = 0; y < dh; y++) {
       for (var x = 0; x < dw; x++) {
          var r, g, b;
-         if (ch === 1) {
-            var v = Math.min(1, Math.max(0, (sc.sample(x,y,0)-n.lo)/n.range));
-            r = g = b = Math.round(v * 255);
-         } else {
-            r = Math.min(255,Math.max(0,Math.round((sc.sample(x,y,0)-n.lo)/n.range*255)));
-            g = Math.min(255,Math.max(0,Math.round((sc.sample(x,y,1)-n.lo)/n.range*255)));
-            b = Math.min(255,Math.max(0,Math.round((sc.sample(x,y,2)-n.lo)/n.range*255)));
-         }
+         if (ch === 1) { var v=Math.min(1,Math.max(0,(sc.sample(x,y,0)-n.lo)/n.range)); r=g=b=Math.round(v*255); }
+         else { r=toU8(sc.sample(x,y,0),n.lo,n.range); g=toU8(sc.sample(x,y,1),n.lo,n.range); b=toU8(sc.sample(x,y,2),n.lo,n.range); }
          bmp.setPixel(x, y, (0xFF<<24)|(r<<16)|(g<<8)|b);
+      }
+   }
+   return bmp;
+}
+
+function renderZoom(img,cx,cy,level,W,H){
+   var cw=1.0/level,ch=1.0/level;
+   var x0=Math.max(0,Math.min(1-cw,cx-cw/2));
+   var y0=Math.max(0,Math.min(1-ch,cy-ch/2));
+   var sw=img.width,sh=img.height;
+   var n=normParams(img);
+   var bmp=new Bitmap(W,H);
+   var ich=img.numberOfChannels;
+   for(var py=0;py<H;py++){
+      var fy=(y0+py/H*ch)*sh-0.5;
+      for(var px=0;px<W;px++){
+         var fx=(x0+px/W*cw)*sw-0.5;
+         var r,g,b;
+         if(ich===1){var v=Math.min(1,Math.max(0,(sampleBilinear(img,fx,fy,0)-n.lo)/n.range));r=g=b=Math.round(v*255);}
+         else{r=toU8(sampleBilinear(img,fx,fy,0),n.lo,n.range);
+              g=toU8(sampleBilinear(img,fx,fy,1),n.lo,n.range);
+              b=toU8(sampleBilinear(img,fx,fy,2),n.lo,n.range);}
+         bmp.setPixel(px,py,(0xFF<<24)|(r<<16)|(g<<8)|b);
       }
    }
    return bmp;
@@ -463,6 +495,10 @@ function EasyStretchMonoDialog() {
    this.previewBitmap = null;
    this.appliedLayers = 0;
    this.busy          = false;
+   this.zoomMode  = false;
+   this.zoomCX    = 0.5; this.zoomCY = 0.5;
+   this.zoomLevel = 4;
+   this.dragStart = null; this.dragRect = null;
 
    this.p = { blackpoint:0, stretch:5, contrast:0,
               background:0, midtones:0.5, highlights:0.5 };
@@ -489,11 +525,48 @@ function EasyStretchMonoDialog() {
          var ox = Math.max(0, Math.round((cw-bw)/2));
          var oy = Math.max(0, Math.round((ch-bh)/2));
          g.drawBitmap(ox, oy, self.previewBitmap);
+         if (!self.zoomMode && self.dragRect !== null) {
+            g.pen = new Pen(0xFFFFFF00, 1);
+            g.drawRect(self.dragRect.x, self.dragRect.y,
+                       self.dragRect.x+self.dragRect.w, self.dragRect.y+self.dragRect.h);
+         }
+         if (self.zoomMode) {
+            g.pen = new Pen(0xFFFFFF88, 1);
+            g.drawText(8, 18, "Zoom " + self.zoomLevel + "x  —  click 'Reset Zoom' to go back");
+         }
       } else {
          g.pen = new Pen(0xFF777777, 1);
          g.drawText(cw/2 - 150, ch/2, "Izaberi kanale i klikni Compose & Preview");
       }
       g.end();
+   };
+
+   this.canvas.onMousePress = function(x, y, btn) {
+      if (self.zoomMode) return;
+      self.dragStart = {x:x, y:y}; self.dragRect = null;
+   };
+   this.canvas.onMouseMove = function(x, y, btn) {
+      if (self.dragStart === null || self.zoomMode) return;
+      self.dragRect = {x:Math.min(self.dragStart.x,x), y:Math.min(self.dragStart.y,y),
+                       w:Math.abs(x-self.dragStart.x), h:Math.abs(y-self.dragStart.y)};
+      self.canvas.repaint();
+   };
+   this.canvas.onMouseRelease = function(x, y, btn) {
+      if (self.zoomMode || self.dragStart === null) return;
+      if (self.dragRect !== null && self.dragRect.w > 15 && self.dragRect.h > 15 && self.previewBitmap !== null) {
+         var bw = self.previewBitmap.width, bh = self.previewBitmap.height;
+         var ox = Math.max(0, Math.round((self.PW-bw)/2));
+         var oy = Math.max(0, Math.round((self.PH-bh)/2));
+         var rx = (self.dragRect.x-ox)/bw, ry = (self.dragRect.y-oy)/bh;
+         var rw = self.dragRect.w/bw,      rh = self.dragRect.h/bh;
+         self.zoomCX = Math.max(0, Math.min(1, rx+rw/2));
+         self.zoomCY = Math.max(0, Math.min(1, ry+rh/2));
+         var avg = (rw+rh)/2;
+         self.zoomLevel = avg < 0.15 ? 8 : avg < 0.35 ? 4 : 2;
+         self.btnZoomReset.enabled = true; self.zoomMode = true;
+         self.updateLevelButtons(); self.renderPreview();
+      }
+      self.dragStart = null; self.dragRect = null;
    };
 
    // ── Helpers ──────────────────────────────────────────────
@@ -534,6 +607,26 @@ function EasyStretchMonoDialog() {
       g.sizer = new Sizer(true); g.sizer.margin = 6; g.sizer.spacing = 5;
       return g;
    }
+
+   // ── Zoom controls ────────────────────────────────────────
+   var zHint = new Label(this); zHint.text = "Drag on preview to zoom  ·  Release slider to update";
+   this.btnZoomReset = new PushButton(this);
+   this.btnZoomReset.text = "⊟  Reset Zoom"; this.btnZoomReset.enabled = false;
+   this.btnZoomReset.onClick = function() {
+      self.zoomMode = false; self.btnZoomReset.enabled = false;
+      self.updateLevelButtons(); self.renderPreview();
+   };
+   var zLbl = new Label(this); zLbl.text = "Level:";
+   this.btnZ2 = new PushButton(this); this.btnZ2.text = "2x"; this.btnZ2.minWidth = 36;
+   this.btnZ4 = new PushButton(this); this.btnZ4.text = "4x"; this.btnZ4.minWidth = 36;
+   this.btnZ8 = new PushButton(this); this.btnZ8.text = "8x"; this.btnZ8.minWidth = 36;
+   this.btnZ2.onClick = function() { self.zoomLevel=2; if(self.zoomMode) self.renderPreview(); };
+   this.btnZ4.onClick = function() { self.zoomLevel=4; if(self.zoomMode) self.renderPreview(); };
+   this.btnZ8.onClick = function() { self.zoomLevel=8; if(self.zoomMode) self.renderPreview(); };
+   var zRow = new Sizer(false); zRow.spacing = 6;
+   zRow.add(zHint); zRow.addStretch();
+   zRow.add(this.btnZoomReset); zRow.add(zLbl);
+   zRow.add(this.btnZ2); zRow.add(this.btnZ4); zRow.add(this.btnZ8);
 
    // ── Channel Composition ──────────────────────────────────
    var gCompose = mkGroup("1 · Channel Composition");
@@ -685,6 +778,7 @@ function EasyStretchMonoDialog() {
 
    // ── Control panel ─────────────────────────────────────────
    var ctrlPanel = new Sizer(true); ctrlPanel.spacing = 8;
+   ctrlPanel.add(zRow);
    ctrlPanel.add(gCompose);
    ctrlPanel.add(gStretch);
    ctrlPanel.addStretch();
@@ -704,10 +798,17 @@ function EasyStretchMonoDialog() {
 
 EasyStretchMonoDialog.prototype = new Dialog;
 
-// renderPreview i doRefresh — identičan pattern kao EasyStretch.js
+EasyStretchMonoDialog.prototype.updateLevelButtons = function() {
+   this.btnZ2.enabled = this.zoomMode;
+   this.btnZ4.enabled = this.zoomMode;
+   this.btnZ8.enabled = this.zoomMode;
+};
+
 EasyStretchMonoDialog.prototype.renderPreview = function() {
    if (this.lastRes === null) return;
-   this.previewBitmap = renderFull(this.lastRes, this.PW, this.PH);
+   this.previewBitmap = this.zoomMode
+      ? renderZoom(this.lastRes, this.zoomCX, this.zoomCY, this.zoomLevel, this.PW, this.PH)
+      : renderFull(this.lastRes, this.PW, this.PH);
    this.canvas.repaint();
 };
 
