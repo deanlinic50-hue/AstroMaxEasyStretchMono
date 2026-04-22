@@ -718,8 +718,9 @@ function EasyStretchMonoDialog() {
    for (var i = 0; i < windows.length; i++) {
       var w = windows[i];
       if (!w.isNull && !w.mainView.isNull
-          && w.mainView.id.indexOf("_esm_") < 0
-          && w.mainView.id.indexOf("AstroMax") < 0)
+          && w.mainView.id.charAt(0) !== '_'
+          && w.mainView.id.indexOf("AstroMax") < 0
+          && w.mainView.id.indexOf("MonoCompose") < 0)
          this.views.push(w.mainView);
    }
 
